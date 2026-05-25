@@ -563,7 +563,7 @@ const ESPN_SOURCES = [
 
 async function fetchESPN(src) {
   try {
-    const d = await (await fetch(src.url, { signal: AbortSignal.timeout(7000) })).json();
+    const d = await (await fetch(src.url, { signal: AbortSignal.timeout(4000) })).json();
     return (d.events || []).map(ev => parseESPNEvent(ev, src));
   } catch { return []; }
 }
@@ -628,11 +628,11 @@ async function fetchBDLAvg(teamAbbr) {
   const out = [];
   for (const name of stars.slice(0, 2)) {
     try {
-      const r1 = await fetch(`https://api.balldontlie.io/v1/players?search=${encodeURIComponent(name)}&per_page=5`, { headers: { Authorization: key }, signal: AbortSignal.timeout(5000) });
+      const r1 = await fetch(`https://api.balldontlie.io/v1/players?search=${encodeURIComponent(name)}&per_page=5`, { headers: { Authorization: key }, signal: AbortSignal.timeout(4000) });
       if (!r1.ok) continue;
       const p = (await r1.json()).data?.[0]; if (!p) continue;
       const season = new Date().getFullYear() - (new Date().getMonth() < 8 ? 1 : 0);
-      const r2 = await fetch(`https://api.balldontlie.io/v1/season_averages?season=${season}&player_ids[]=${p.id}`, { headers: { Authorization: key }, signal: AbortSignal.timeout(5000) });
+      const r2 = await fetch(`https://api.balldontlie.io/v1/season_averages?season=${season}&player_ids[]=${p.id}`, { headers: { Authorization: key }, signal: AbortSignal.timeout(4000) });
       if (!r2.ok) continue;
       const avg = (await r2.json()).data?.[0]; if (!avg) continue;
       out.push({ player: p.first_name + ' ' + p.last_name, avg });
@@ -783,14 +783,55 @@ function genForm(p){ return Array.from({length:5},()=>{ const r=Math.random(); r
 function sigClass(picks){ if(!picks.length)return'low'; const m=picks[0].conf; return m>=72?'strong':m>=65?'medium':'low'; }
 
 // ═══════════════════════════════════════════════════════
+//  DEMO MATCHES (fallback si réseau indisponible)
+// ═══════════════════════════════════════════════════════
+function getDemoMatches() {
+  const now = new Date();
+  const t1 = new Date(now.getTime()+3600000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+  const t2 = new Date(now.getTime()+7200000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+  const t3 = new Date(now.getTime()+5400000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'});
+  const makeMatch = (id,sport,league,emoji,home,homeS,away,awayS,hw,aw,time,isLive,hs,as_,period) => {
+    const m = {
+      id, sport, league, emoji,
+      home, homeShort:homeS, away, awayShort:awayS,
+      homeWinPct:hw, awayWinPct:aw,
+      homeRecord:`${Math.round(hw*30)}-${Math.round((1-hw)*30)}`,
+      awayRecord:`${Math.round(aw*30)}-${Math.round((1-aw)*30)}`,
+      homeForm:genForm(hw), awayForm:genForm(aw),
+      homeScore:isLive?hs:null, awayScore:isLive?as_:null,
+      time, date: new Date().toISOString(),
+      isLive, isFinished:false, playerProps:[],
+      clock: isLive?`${5+Math.round(rnd(0,30))}'`:'',
+      period: isLive?period:0,
+      periodLabel: isLive?(sport==='football'?`${period===1?'1ère':'2ème'} MT`:`Q${period}`):'',
+    };
+    const picks = smartPicks(m);
+    return {...m, picks, signal:sigClass(picks)};
+  };
+  return [
+    makeMatch('demo1','football','Ligue 1','🇫🇷','Paris Saint-Germain','PSG','Olympique de Marseille','OM',0.72,0.52,t1,false,null,null,0),
+    makeMatch('demo2','basketball','NBA','🏀','Los Angeles Lakers','LAL','Golden State Warriors','GSW',0.68,0.60,t2,true,58,62,2),
+    makeMatch('demo3','football','Premier League','🏴󠁧󠁢󠁥󠁮󠁧󠁿','Manchester City','MCI','Arsenal','ARS',0.65,0.58,t3,false,null,null,0),
+    makeMatch('demo4','hockey','NHL','🏒','Colorado Avalanche','COL','Edmonton Oilers','EDM',0.63,0.55,t1,false,null,null,0),
+    makeMatch('demo5','baseball','MLB','⚾','New York Yankees','NYY','Boston Red Sox','BOS',0.67,0.53,t2,false,null,null,0),
+    makeMatch('demo6','basketball','NBA','🏀','Boston Celtics','BOS','Miami Heat','MIA',0.74,0.50,t3,false,null,null,0),
+    makeMatch('demo7','tennis','Tennis ATP','🎾','Carlos Alcaraz','Alcaraz','Novak Djokovic','Djokovic',0.66,0.62,t1,false,null,null,0),
+  ].filter(m=>m.picks.length>0);
+}
+
+// ═══════════════════════════════════════════════════════
 //  LOAD ALL DATA
 // ═══════════════════════════════════════════════════════
 async function loadAll() {
   document.getElementById('refreshBtn').classList.add('loading');
-  document.getElementById('cardsWrap').innerHTML = '<div class="spin-w"><div class="spinner"></div><div class="spin-t">Chargement ESPN + BDL...</div></div>';
+  document.getElementById('cardsWrap').innerHTML = '<div class="spin-w"><div class="spinner"></div><div class="spin-t">Connexion aux sources...</div></div>';
   setPill('espn','loading'); setPill('bdl','loading'); setPill('live','loading');
 
-  const espnResults = await Promise.all(ESPN_SOURCES.map(s => fetchESPN(s)));
+  // Timeout global 5s sur tout le bloc ESPN — évite le spinner infini
+  const espnResults = await Promise.race([
+    Promise.all(ESPN_SOURCES.map(s => fetchESPN(s))),
+    new Promise(resolve => setTimeout(() => resolve(ESPN_SOURCES.map(()=>[])), 5000))
+  ]);
   const flat = espnResults.flat();
   const hasData = flat.length > 0;
   setPill('espn', hasData ? 'ok' : 'err');
@@ -822,6 +863,13 @@ async function loadAll() {
   allMatches = raw
     .map(m => { const picks=smartPicks(m); return {...m, picks, signal:sigClass(picks)}; })
     .filter(m => m.picks.length > 0);
+
+  // Si aucune donnée réelle (réseau indisponible) → démo
+  if (allMatches.length === 0) {
+    allMatches = getDemoMatches();
+    setPill('espn','err');
+    showToast('⚠ Données réelles indisponibles — Mode démo');
+  }
 
   aiCache = {};
   renderMatches(allMatches);
